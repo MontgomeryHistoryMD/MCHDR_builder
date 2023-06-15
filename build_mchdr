@@ -1,0 +1,620 @@
+#!/bin/bash
+#
+# MCHDR / DSpace build script. Concept cribbed from Terry W. Brady and
+# then built up by Rob Jenson <rbj@spotch.com> for Montgomery History.
+# This can be used to build and update the software. For safety reasons,
+# "fresh_install" is not an option in this script. Too dangerous!
+#
+# Created by Rob Jenson. Check local git metadata for update date.
+#
+#------------------------------------------------------------------------
+#
+# FIXME (Updated 2023-06-11):
+#
+# * Make sure that we are going to build DSpace 6 with Java 8, not Java 11!
+#
+# * Make the copying of local.cfg and git checkout smarter:
+#   - Don't copy the local.cfg file if the file has not changed, forcing an unecessary rebuild
+#   
+#------------------------------------------------------------------------
+
+PROGNAME=$(basename "$0")
+
+# The base directory where our DSpace repo and our
+# MCHDR_config repo are located.
+DFLT_SOURCE_BASE="/usr/local/src"
+
+# Where to find our configuration files
+DFLT_CONFIG_BASE="/usr/local/src/MCHDR_config"
+
+# Which major version of DSpace is to be built by default?
+# This can be changed on the command line.
+DFLT_MAJOR_RELEASE="6"
+
+# Which revision of DSpace is to be built?
+DFLT_REVISION="6.4"
+
+# Which branch in MontgomeryHistoryMD:MCHDR_config are we working with?
+DFLT_CONFIG_BRANCH="main"
+
+# Type of build to run by default
+DFLT_BUILD_TYPE="asis"
+
+# If set to 1, just build with Maven, skip the Ant install
+BUILD_ONLY=0
+
+# Target for Maven build. Default is to build the package
+MVN_TARGET="package"
+
+# Build option for Mirage2 XMLUI interface
+MVN_OPTIONS="-Dmirage2.on=true"
+
+# Action for Ant build. Default is to update everything
+ANT_TARGET="update"
+
+# We might want to only do an ant action
+ANT_ONLY=0
+
+# Turn on debugging messages
+DEBUG=0
+
+# Do nothing of substance just echo commands
+DRYRUN=0
+
+# Need a variable to cleanup
+MAKECLEAN=0
+
+###########################################################################
+# fatal() - Exit with an error message after running cleanup.             #
+###########################################################################
+function fatal () {
+    printf "${PROGNAME}: %s\n" "$*"
+    cleanup
+    exit 1
+}
+
+
+###########################################################################
+# debugmsg() - If debugging is enabled, output the message. Return 0.     #
+###########################################################################
+function debugmsg () {
+    local message="$1"
+
+    if [ "$DEBUG" != 0 ]
+    then
+	printf "DEBUG %s\n" "${message}"
+    fi
+}
+
+###########################################################################
+# dump_env_vars() - Display environment variables we care about           #
+###########################################################################
+function dump_env_vars () {
+    local var
+
+    for var in ANT_ONLY ANT_TARGET BUILD_ONLY BUILD_TYPE \
+			CONFIG_BASE CONFIG_BRANCH CONFIG_DIR \
+	    		DEBUG DRYRUN DSPACE_INSTALLER_DIR DSPACE_SOURCE_DIR \
+			JAVA_HOME MAJOR_RELEASE MAKECLEAN MVN_OPTIONS \
+			MVN_TARGET PROGNAME REVISION SOURCE_BASE SOURCE_BRANCH
+    do
+	printf "%s=\"%s\"\n" "${var}" "$(eval echo \$${var})"
+    done
+}
+
+###########################################################################
+# run_cmd() - Wrapper before running commands to enable debugging.        #
+###########################################################################
+function run_cmd () {
+    local retval
+    local always=0
+
+    if [ "$1" == "--always" ]
+    then
+	always=1
+	shift
+    fi
+    
+    if [ "$DRYRUN" == "1" ]
+    then
+	if [ "${always}" != "1" ]
+	then
+	    echo "DRYRUN (Would run): $*"
+	    return
+	fi
+    fi
+	
+    debugmsg "Running command: $*"
+
+    "$@"
+
+    retval="$?"
+
+    debugmsg "Command return value = ${retval}"
+
+    return $retval
+}
+
+###########################################################################
+# helpmsg() - Display the command line options available, then exit with  #
+# an error return value.                                                  #
+# It is recommended that this be updated before editing parse_commandline.#
+###########################################################################
+function helpmsg () {
+    cat <<EOF
+    usage: ${PROGNAME} [options] build-type [ant-target]
+
+    options:
+        -d, --debug                   Turn on debugging
+        -h, --help                    This message
+	--ant-only                    Only run the ant targets without rebuilding the package
+        --build-only                  Build the package with mvn but skip the ant installation step
+	--clean			      Clean all targets from previous builds before building
+	--config-base [directory]     Location of the configuration file tree
+	--config_branch [branch-name] Branch to checkout from MontgomeryHistoryMD:MCHDR-CONFIG
+	--source_base [directory]     Location of the source file tree
+        --source_branch [branch-name] Branch to checkout from MontgomeryHistoryMD:DSPace 
+	--dry-run                     Describe what will happen but do not do anythinga
+	--release [version]           DSpace major release to build. (Unspecified = 6)
+        --revision [version]	      Apply temp-fixes for this revision (Unspecified = 6.3)
+
+    build-type ... how to set up the source code tree (required)
+    	asis                     Do not change any files before building
+        dev, development         Check out the development source code branch and build
+        prod, production         Check out the production source code branch and build
+	test	    		 Check out the test source code branch and build
+
+    ant-target ... defaults to update if not specified on the command line
+        update                 Update config, etc, lib and web applications in [dspace]
+        update_configs         Update files in [dspace]/config
+	update_code            Update compiled code in [dspace]/bin, [dspace]/lib and [dspace]/etc
+        update_webapps         Update binaries in [dspace]/webapps
+        update_solr_indexes    Checks if any Solr indexes need upgrading (to latest Solr revision) and if so, upgrades them.
+	clean_backups          Remove .bak directories under install directory
+	test_database          Attempt to connect to the DSpace database in order to verify that configuration is correct
+
+EOF
+    cleanup
+    exit 1
+}
+
+###########################################################################
+# Parse the command line for options. Only the build type is a required   #
+# parameter. Any syntax error or logic error will lead to an error message#
+# or help message and program exit.                                       #
+###########################################################################
+function parse_commandline () {
+
+    debugmsg "parse_commandline( $* ) called."
+    
+    while [[ "$1" =~ --* ]]
+    do
+	case "$1" in
+	    # turn debugging on
+	    -d | --debug )
+		DEBUG=1
+		;;
+
+	    # Skip running Maven to rebuild
+	    --ant-only )
+		ANT_ONLY=1
+		;;
+
+	    # Skip running Ant to install
+	    --build-only )
+		BUILD_ONLY=1
+		;;
+
+            # Clean the targets in the source tree and start over
+	    --clean )
+		MAKECLEAN=1
+		;;
+		
+            --config_base )
+                NEW_CONFIG_BASE="$2"
+                shift
+		;;
+
+            --config_branch )
+                NEW_CONFIG_BRANCH="$2"
+                shift
+		;;
+
+            --dry-run | --dryrun )
+		DRYRUN=1
+		;;
+
+	    --source_base )
+                NEW_SOURCE_BASE="$2"
+		shift
+		;;
+
+            --source_branch )
+                NEW_SOURCE_BRANCH="$2"
+		shift
+		;;
+
+            --release )
+                NEW_MAJOR_RELEASE="$2"
+		shift
+		if [ "$DSPACE_MAJOR_RELEASE" != "6" ]
+		then
+		    fatal "Changing release is a future feature to be implemented."
+	        fi
+		;;
+
+	    --revision )
+                NEW_REVISION="$2"	    	       
+		shift
+		;;
+
+	    -h | --help | --* )
+		helpmsg
+		;;
+	esac
+	shift
+    done
+
+    # So here $1 would be the keyword for how we will build the code
+    case "$1" in
+	asis )
+	    NEW_BUILD_TYPE="asis"
+		;;
+
+	production | prod )
+	    NEW_BUILD_TYPE="production"
+	    ;;
+
+	development | dev )
+	    NEW_BUILD_TYPE="development"
+	    ;;
+
+	test )
+	    NEW_BUILD_TYPE="test"
+	    ;;
+
+	* )
+	    fatal "Invalid build type: ${1}"
+	    ;;
+    esac
+
+    shift
+
+    if [ $# -ge 1 ]
+    then
+	case "$1" in
+ 	    update | update-configs | update_code | update_webapps | update_solr_indexes | clean_backups | test_database  )
+		ANT_TARGET="$1"
+		;;
+
+	    * )
+		fatal "Invalid ant target name: $1"
+		;;
+	esac
+	shift
+    fi
+
+    if [ $# -ge 1 ]
+    then
+	helpmsg
+    fi
+	 
+    if [ "${BUILD_ONLY}" == "1" ] &&  [ "${ANT_ONLY}" == "1" ]
+    then
+	fatal "Specifying --build-only and --ant-only makes no sense!"
+    fi
+}
+
+###########################################################################
+# New model for the configuration file locations requires knowing what    #
+# major version of DSpace we will be building. This will allow us to grow #
+# this script to build DSpace 7 when the time comes.                      #
+###########################################################################
+function set_up_variables () {
+
+    if [ "X${NEW_BUILD_TYPE}" != "X" ]
+    then
+	BUILD_TYPE="${NEW_BUILD_TYPE}"
+    else
+	BUILD_TYPE="${DFLT_BUILD_TYPE}"
+    fi
+
+    if [ "X${NEW_CONFIG_BASE}" != "X" ]
+    then
+	CONFIG_BASE="${NEW_CONFIG_BASE}"
+    else
+	CONFIG_BASE="${DFLT_CONFIG_BASE}"
+    fi
+
+    if [ "X${NEW_CONFIG_BRANCH}" != "X" ]
+    then
+	CONFIG_BRANCH="${NEW_CONFIG_BRANCH}"
+    else
+	CONFIG_BRANCH="${DFLT_CONFIG_BRANCH}"
+    fi
+
+    if [ "X${NEW_SOURCE_BASE}" != "X" ]
+    then
+	SOURCE_BASE="${NEW_SOURCE_BASE}"
+    else
+	SOURCE_BASE="${DFLT_SOURCE_BASE}"
+    fi
+
+    if [ "X${NEW_MAJOR_RELEASE}" != "X" ]
+    then
+	MAJOR_RELEASE="${NEW_MAJOR_RELEASE}"
+    else
+	MAJOR_RELEASE="${DFLT_MAJOR_RELEASE}"
+    fi
+
+    if [ "X${NEW_REVISION}" != "X" ]
+    then
+	REVISION="${NEW_REVISION}"
+    else
+	REVISION="${DFLT_REVISION}"
+    fi
+
+    # We have to calculate the branch name last
+    # because the default depends on a lot of other
+    # variables ... or it could be set explicitly on the command
+    # line
+    if [ "${BUILD_TYPE}" != "asis" ]
+    then
+	if [ "X${NEW_SOURCE_BRANCH}" != "X" ]
+	then
+	    SOURCE_BRANCH="${NEW_SOURCE_BRANCH}"
+	else
+	    SOURCE_BRANCH="mh_${BUILD_TYPE}_${REVISION}"
+	fi
+    else
+	SOURCE_BRANCH=""
+    fi
+
+    DSPACE_SOURCE_DIR="${SOURCE_BASE}/DSpace${MAJOR_RELEASE}"
+
+    DSPACE_INSTALLER_DIR="${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer"
+
+    CONFIG_DIR="${CONFIG_BASE}/DSpace${MAJOR_RELEASE}"
+}
+
+###########################################################################
+# Run Maven clean to start with fresh targets                             #
+###########################################################################
+function do_maven_clean () {
+    run_cmd --always pushd "${DSPACE_SOURCE_DIR}" >/dev/null || fatal "Unable to cd to ${DSPACE_SOURCE_DIR}"
+
+    run_cmd mvn clean "${MVN_OPTIONS}" 2>&1 || fatal "Maven failure"
+
+    run_cmd --always popd >/dev/null    
+}
+
+
+###########################################################################
+# check_out_if_necessary() - Check out a different branch in git ... but  #
+# don't check it out if that is the current branch, because that will     #
+# cause an unnecessary rebuild of everything. Also return an error code if#
+# a different branch can't be checked out because of local changes.       #
+###########################################################################
+function check_out_if_necessary () {
+    local git_status retvalue current_branch
+    local location="$1"
+    local new_branch="$2"
+
+    debugmsg "Enter function checkout_dspace_branch ( ${location}, ${new_branch} )."
+
+    if [ "${BUILD_TYPE}" == "asis" ] ; then debugmsg "Not checking anything out - BUILD_TYPE = \"asis\"." ; return ; fi
+
+    current_branch=$(run_cmd --always git branch --show-current)
+    
+    if [ "${current_branch}" == "${new_branch}" ] ; then debugmsg "Already in ${new_branch}." ; return ; fi
+	
+    if ! git_status=$(run_cmd --always git status --short 2>&1)
+    then
+       fatal "Error from git status: ${git_status}."
+    fi
+
+    if [ "X${git_status}" != "X" ]
+    then
+	print "${git_status}\n\n"
+	print "Looks like you need to commit  or stash the current changes before switching branches.\n"
+	return 11
+    fi
+
+
+    
+    run_cmd --always pushd "${location}"  >/dev/null || fatal "Unable to cd to ${location}"
+    debugmsg "Checking out branch ${new_branch}."    
+    run_cmd git checkout "${new_branch}"
+    retvalue=$?
+
+    run_cmd --always popd >/dev/null
+
+    if [ "${retvalue}" != "0" ]
+    then
+	fatal "Failed to check out ${CONFIG_BRANCH}."
+    fi
+}
+
+###########################################################################
+# copy_configuration() - The whole point of this script is to copy the    #
+# right version of local.cfg into the right source tree before building.  #
+# Here it goes.                                                           #
+###########################################################################
+function copy_configuration () {
+    local src dest retvalue
+
+    if [ "${BUILD_TYPE}" == "asis" ]
+    then
+	debugmsg "Not copying anything because \"asis\" is the build type."
+	return
+    fi
+
+    run_cmd --always pushd "${DSPACE_SOURCE_DIR}" >/dev/null || fatal "Unable to cd to ${DSPACE_SOURCE_DIR}"
+    
+    src="${CONFIG_DIR}/${BUILD_TYPE}/local.cfg"
+    
+    dest="${DSPACE_SOURCE_DIR}/dspace/config/local.cfg"
+
+    if diff -q "${src}" "${dest}" >/dev/null
+    then
+	run_cmd cp -v "${src}" "${dest}"
+	retvalue=$?
+    else
+	debugmsg "Not copying local.cfg because it has not changed."
+    fi
+    
+    run_cmd --always popd >/dev/null
+
+    if [ "${retvalue}" != "0" ]
+    then
+	fatal "Failed to copy ${src} to ${dest}."
+    fi
+}
+
+###########################################################################
+# do_maven_build() - Once the configuration is set, we want to do the     #
+# build.                                                                  #
+###########################################################################
+function do_maven_build () {
+    local retvalue
+
+    if [ "${ANT_ONLY}" == "1" ]
+    then
+	debugmsg "--ant-only flag is set: do_maven_build() does nothing!"
+	return
+    fi
+    
+    run_cmd --always pushd "${DSPACE_SOURCE_DIR}" >/dev/null || fatal "Unable to cd to ${DSPACE_SOURCE_DIR}"
+    
+    run_cmd mvn "${MVN_TARGET}" "${MVN_OPTIONS}" 2>&1
+    retvalue=$?
+    
+    run_cmd --always popd >/dev/null
+
+    if [ "${retvalue}" != "0" ]
+    then
+	fatal "Maven returned with an error."
+    fi
+}
+
+###########################################################################
+# do_ant_update() - If Maven went OK, then we can update the system unless#
+# the user doesn't want an installation step.                             #
+###########################################################################
+function do_ant_update () {
+    local retvalue
+
+    if [ "${BUILD_ONLY}" == "1" ]
+    then
+	debugmsg "--build-only flag set: nothing will be installed."
+	return
+    fi
+
+    run_cmd pushd "${DSPACE_INSTALLER_DIR}" >/dev/null || fatal "Unable to cd to ${DSPACE_INSTALLER_DIR}"
+    
+    run_cmd sudo -u dspace ant "${ANT_TARGET}"
+    retvalue=$?
+
+    run_cmd popd >/dev/null
+    
+    if [ "${retvalue}" != "0" ]
+    then
+	fatal "Ant returned with an error."
+    fi
+
+    # We only want to restart tomcat if necessary
+    case "${ANT_TARGET}" in
+	update | update-configs | update_webapps )
+	    run_cmd sudo systemctl restart tomcat8
+	    ;;
+    esac
+}
+
+###########################################################################
+# fix_dspace_issue_8557() - The DSpace handle server does not start after #
+# an update to Java 8: https://github.com/DSpace/DSpace/issues/8557 . We  #
+# have a fixed build of the jar file that needs to be copied into the     #
+# tree befrore it is distributed.                                         #
+# FIXME: Figure out how to copy it before building the .war files which   #
+# will be otherwise built with the .jar file from the source code build.  # 
+###########################################################################
+function fix_dspace_issue_8557 () {
+
+    local src="${SOURCE_BASE}/temp-fixes/issue_8557/handle-6.2.5_03.jar"
+    local target_file="handle-6.2.jar"
+    local component=""
+
+    if [ -f "${src}" ];
+    then
+	run_cmd cp "$src" "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/lib/${target_file}"
+
+	for component in sword rest swordv2 xmlui rdf jspui oai
+	do
+	    run_cmd cp "$src" "${DSPACE_SOURCE_DIR}/${component}/target/${component}-${DSPACE_VERSION}/WEB-INF/lib/${target_file}"
+	done
+
+	for component in sword jspui swordv2 rdf oai rest xmlui
+	do
+	    run_cmd cp "$src" "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/${component}-${DSPACE_VERSION}/WEB-INF/lib/${target_file}"	    
+	done
+
+	for component in rdf rest
+	do
+	    run_cmd cp "$src" "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/war/work/org.dspace/dspace-${component}/WEB-INF/lib/${target_file}"
+	done
+
+	for component in sword jspui swordv2 rdf oai rest xmlui
+	do
+	    run_cmd cp "$src" "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/webapps/${component}/WEB-INF/lib/${target_file}"
+	done
+    fi
+}
+
+###########################################################################
+# do_apply_temp_fixes () - There are some fixes that should not normally  #
+# be part of a build script except that they are needed to fix something. #
+###########################################################################
+function do_apply_temp_fixes () {
+
+    fix_dspace_issue_8557
+}
+
+###########################################################################
+# cleanup() - Run anything here that should be done before the program    #
+# exits. Should be called before successful or fatal exit.                #
+###########################################################################
+function cleanup () {
+    return
+}
+
+################
+# MAIN PROGRAM #
+################    
+
+parse_commandline "$@"
+
+set_up_variables
+
+if [ "$DEBUG" != "0" ]
+then
+	run_cmd dump_env_vars
+fi
+
+check_out_if_necessary "${DSPACE_SOURCE_DIR}" "${SOURCE_BRANCH}"
+
+check_out_if_necessary "${CONFIG_DIR}" "${CONFIG_BRANCH}"
+
+copy_configuration
+
+if [ "${MAKECLEAN}" == "1" ]
+then
+	run_cmd do_maven_clean
+fi	
+
+do_maven_build
+
+do_apply_temp_fixes
+
+do_ant_update
+
+cleanup
