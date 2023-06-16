@@ -540,7 +540,7 @@ function do_ant_update () {
 ###########################################################################
 function fix_dspace_issue_8557 () {
 
-    local src="${SOURCE_BASE}/temp-fixes/issue_8557/handle-6.2.5_03.jar"
+    local src="${SOURCE_BASE}/MCHDR_builder/temp-fixes/issue_8557/handle-6.2.5_03.jar"
     local target_file="handle-6.2.jar"
     local component=""
 
