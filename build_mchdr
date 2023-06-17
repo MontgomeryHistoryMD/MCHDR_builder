@@ -1,22 +1,28 @@
 #!/bin/bash
-#
+############################################################################
 # MCHDR / DSpace build script. Concept cribbed from Terry W. Brady and
 # then built up by Rob Jenson <rbj@spotch.com> for Montgomery History.
 # This can be used to build and update the software. For safety reasons,
 # "fresh_install" is not an option in this script. Too dangerous!
 #
-# Created by Rob Jenson. Check local git metadata for update date.
+# Copyright 2022-2023, Robert Jenson, rbj@spotch.com . All intellectual
+# property rights in this software are donated to Montgomery History,
+# of Rockville, Maryland, in perpetuity.
+#---------------------------------------------------------------------------
+# This began as a very simple build script for the Montgomery
+# County History Digital Repository (MCHDR), basically merging a local
+# configuration file that is in a private Github repository with
+# a branch of the DSpace 6.x software cloned from
+# https://github.com/DSpace/DSpace. There has been a bit of feature creep
+# to generalize it. It should be adaptible to any similar site that wants
+# to build from the Dspace git source code with local modifications.
+#---------------------------------------------------------------------------
+# # FIXME (Updated 2023-06-16):
 #
-#------------------------------------------------------------------------
-#
-# FIXME (Updated 2023-06-11):
-#
-# * Make sure that we are going to build DSpace 6 with Java 8, not Java 11!
-#
-# * Make the copying of local.cfg and git checkout smarter:
-#   - Don't copy the local.cfg file if the file has not changed, forcing an unecessary rebuild
-#   
-#------------------------------------------------------------------------
+# - Some things need to be generalized away from assuming that the
+#    default release will be DSpace 6.x, as we start to explore DSpace
+#    7.
+###########################################################################
 
 PROGNAME=$(basename "$0")
 
@@ -32,7 +38,7 @@ DFLT_CONFIG_BASE="/usr/local/src/MCHDR_config"
 DFLT_MAJOR_RELEASE="6"
 
 # Which revision of DSpace is to be built?
-DFLT_REVISION="6.4"
+DFLT_REVISION="6.5-SNAPSHOT"
 
 # Which branch in MontgomeryHistoryMD:MCHDR_config are we working with?
 DFLT_CONFIG_BRANCH="main"
@@ -82,23 +88,27 @@ function debugmsg () {
 
     if [ "$DEBUG" != 0 ]
     then
-	printf "DEBUG %s\n" "${message}"
+	printf "MCHDR-DEBUG %s\n" "${message}"
     fi
 }
 
 ###########################################################################
-# dump_env_vars() - Display environment variables we care about           #
+# dump_env_vars() - Display some variables for debugging.                 #
 ###########################################################################
 function dump_env_vars () {
     local var
 
-    for var in ANT_ONLY ANT_TARGET BUILD_ONLY BUILD_TYPE \
-			CONFIG_BASE CONFIG_BRANCH CONFIG_DIR \
-	    		DEBUG DRYRUN DSPACE_INSTALLER_DIR DSPACE_SOURCE_DIR \
-			JAVA_HOME MAJOR_RELEASE MAKECLEAN MVN_OPTIONS \
-			MVN_TARGET PROGNAME REVISION SOURCE_BASE SOURCE_BRANCH
+    for var in BLANKLINE BUILD_TYPE MAJOR_RELEASE REVISION MVN_OPTIONS BLANKLINE \
+			 DSPACE_SOURCE_DIR SOURCE_BRANCH BLANKLINE \
+			 CONFIG_DIR CONFIG_BRANCH BLANKLINE \
+			 DSPACE_INSTALLER_DIR
     do
-	printf "%s=\"%s\"\n" "${var}" "$(eval echo \$${var})"
+	if [ "${var}" == "BLANKLINE" ]
+	then
+	    printf "\n"
+	else
+	    printf "%s=\"%s\"\n" "${var}" "$(eval echo \$${var})"
+	fi
     done
 }
 
@@ -132,7 +142,7 @@ function run_cmd () {
 
     debugmsg "Command return value = ${retval}"
 
-    return $retval
+    return ${retval}
 }
 
 ###########################################################################
@@ -154,9 +164,9 @@ function helpmsg () {
 	--config_branch [branch-name] Branch to checkout from MontgomeryHistoryMD:MCHDR-CONFIG
 	--source_base [directory]     Location of the source file tree
         --source_branch [branch-name] Branch to checkout from MontgomeryHistoryMD:DSPace 
-	--dry-run                     Describe what will happen but do not do anythinga
-	--release [version]           DSpace major release to build. (Unspecified = 6)
-        --revision [version]	      Apply temp-fixes for this revision (Unspecified = 6.3)
+	--dry-run                     Describe what will happen but do not do anything
+	--major-release [version]           DSpace major release to build. (Unspecified = $DFLT_MAJOR_RELEASE )
+        --revision [version]	      Apply temp-fixes for this revision (Unspecified = $DFLT_REVISION )
 
     build-type ... how to set up the source code tree (required)
     	asis                     Do not change any files before building
@@ -234,7 +244,7 @@ function parse_commandline () {
 		shift
 		;;
 
-            --release )
+            --major-release )
                 NEW_MAJOR_RELEASE="$2"
 		shift
 		if [ "$DSPACE_MAJOR_RELEASE" != "6" ]
@@ -385,7 +395,7 @@ function do_maven_clean () {
 
     run_cmd mvn clean "${MVN_OPTIONS}" 2>&1 || fatal "Maven failure"
 
-    run_cmd --always popd >/dev/null    
+    run_cmd --always popd >/dev/null 2>&1    
 }
 
 
@@ -427,7 +437,7 @@ function check_out_if_necessary () {
     run_cmd git checkout "${new_branch}"
     retvalue=$?
 
-    run_cmd --always popd >/dev/null
+    run_cmd --always popd >/dev/null 2>&1
 
     if [ "${retvalue}" != "0" ]
     then
@@ -463,7 +473,7 @@ function copy_configuration () {
 	debugmsg "Not copying local.cfg because it has not changed."
     fi
     
-    run_cmd --always popd >/dev/null
+    run_cmd --always popd >/dev/null 2>&1
 
     if [ "${retvalue}" != "0" ]
     then
@@ -489,7 +499,7 @@ function do_maven_build () {
     run_cmd mvn "${MVN_TARGET}" "${MVN_OPTIONS}" 2>&1
     retvalue=$?
     
-    run_cmd --always popd >/dev/null
+    run_cmd --always popd >/dev/null 2>&1
 
     if [ "${retvalue}" != "0" ]
     then
@@ -515,7 +525,7 @@ function do_ant_update () {
     run_cmd sudo -u dspace ant "${ANT_TARGET}"
     retvalue=$?
 
-    run_cmd popd >/dev/null
+    run_cmd --always popd >/dev/null 2>&1
     
     if [ "${retvalue}" != "0" ]
     then
@@ -535,48 +545,64 @@ function do_ant_update () {
 # an update to Java 8: https://github.com/DSpace/DSpace/issues/8557 . We  #
 # have a fixed build of the jar file that needs to be copied into the     #
 # tree befrore it is distributed.                                         #
-# FIXME: Figure out how to copy it before building the .war files which   #
-# will be otherwise built with the .jar file from the source code build.  # 
+# - Copy the new .jar file to each place where it belongs                 #
+# - Remove the old .jar file                                              #
+# - Replace the .jar file in the .war files where it exists.              #
 ###########################################################################
 function fix_dspace_issue_8557 () {
 
-    local src="${SOURCE_BASE}/MCHDR_builder/temp-fixes/issue_8557/handle-6.2.5_03.jar"
-    local target_file="handle-6.2.jar"
+    local new_file="${SOURCE_BASE}/MCHDR_builder/temp-fixes/issue_8557/handle-6.2.5_03.jar"
+    local old_file="handle-6.2.jar"
     local component=""
 
-    if [ -f "${src}" ];
+    debugmsg "Applying fix for DSpace Issue 8557."
+
+    if [ -f "${new_file}" ];
     then
-	run_cmd cp "$src" "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/lib/${target_file}"
-
-	for component in sword rest swordv2 xmlui rdf jspui oai
+	run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/lib/"
+	run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/lib/${old_file}"
+	
+	for component in jspui oai rdf rest sword swordv2 xmlui
 	do
-	    run_cmd cp "$src" "${DSPACE_SOURCE_DIR}/${component}/target/${component}-${DSPACE_VERSION}/WEB-INF/lib/${target_file}"
+	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/${component}/target/${component}-${REVISION}/WEB-INF/lib/"
+	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/${component}/target/${component}-${REVISION}/WEB-INF/lib/${old_file}"
+	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/${component}-${REVISION}/WEB-INF/lib/"
+	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/${component}-${REVISION}/WEB-INF/lib/${old_file}"
+	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/webapps/${component}/WEB-INF/lib/"
+	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/webapps/${component}/WEB-INF/lib/${old_file}"
+	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace-${component}/target/dspace-${component}-${REVISION}/WEB-INF/lib/"
+	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace-${component}/target/dspace-${component}-${REVISION}/WEB-INF/lib/${old_file}"
+	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/war/work/org.dspace/dspace-${component}/WEB-INF/lib/"
+	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/war/work/org.dspace/dspace-${component}/WEB-INF/lib/${old_file}"
+
+	    # So we use ZIP "delete" to remove files from a .war file and JAR "update" to add a different version
+    	    run_cmd --always pushd "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/war/work/org.dspace/dspace-${component}/"
+	    run_cmd sudo -u dspace zip -d "${DSPACE_SOURCE_DIR}/dspace-${component}/target/dspace-${component}-${REVISION}.war" "WEB-INF/lib/${old_file}"
+	    run_cmd sudo -u dspace jar uf "${DSPACE_SOURCE_DIR}/dspace-${component}/target/dspace-${component}-${REVISION}.war" "WEB-INF/lib/$(basename ${new_file})"
+	    run_cmd sudo -u dspace zip -d "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/${component}-${REVISION}.war" "WEB-INF/lib/${old_file}"
+	    run_cmd sudo -u dspace jar uf "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/${component}-${REVISION}.war" "WEB-INF/lib/$(basename ${new_file})"
+	    run_cmd --always popd >/dev/null 2>&1
 	done
 
-	for component in sword jspui swordv2 rdf oai rest xmlui
-	do
-	    run_cmd cp "$src" "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/${component}-${DSPACE_VERSION}/WEB-INF/lib/${target_file}"	    
-	done
-
-	for component in rdf rest
-	do
-	    run_cmd cp "$src" "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/war/work/org.dspace/dspace-${component}/WEB-INF/lib/${target_file}"
-	done
-
-	for component in sword jspui swordv2 rdf oai rest xmlui
-	do
-	    run_cmd cp "$src" "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/webapps/${component}/WEB-INF/lib/${target_file}"
-	done
     fi
 }
 
 ###########################################################################
-# do_apply_temp_fixes () - There are some fixes that should not normally  #
-# be part of a build script except that they are needed to fix something. #
+# do_post_build__fixes () - Fix anything that needs to be done after Maven#
+# builds the package and before Ant installs it. It is best to check the  #
+# release and revision before applying any fixes.                         #
 ###########################################################################
-function do_apply_temp_fixes () {
+function do_post_build_fixes () {
 
-    fix_dspace_issue_8557
+    case "$MAJOR_RELEASE" in
+	"6" )
+	    debugmsg "Applying Post-build fixes for DSpace 6.x."
+	    fix_dspace_issue_8557
+	    ;;
+	* )
+	    ;;
+    esac
+    debugmsg "Finished applying Post-build fixes."
 }
 
 ###########################################################################
@@ -584,6 +610,8 @@ function do_apply_temp_fixes () {
 # exits. Should be called before successful or fatal exit.                #
 ###########################################################################
 function cleanup () {
+    
+    debugmsg "No cleanup activities done."
     return
 }
 
@@ -613,7 +641,7 @@ fi
 
 do_maven_build
 
-do_apply_temp_fixes
+do_post_build_fixes
 
 do_ant_update
 
