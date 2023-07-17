@@ -488,12 +488,6 @@ function copy_configuration () {
 function do_maven_build () {
     local retvalue
 
-    if [ "${ANT_ONLY}" == "1" ]
-    then
-	debugmsg "--ant-only flag is set: do_maven_build() does nothing!"
-	return
-    fi
-    
     run_cmd --always pushd "${DSPACE_SOURCE_DIR}" >/dev/null || fatal "Unable to cd to ${DSPACE_SOURCE_DIR}"
     
     run_cmd mvn "${MVN_TARGET}" "${MVN_OPTIONS}" 2>&1
@@ -513,12 +507,6 @@ function do_maven_build () {
 ###########################################################################
 function do_ant_update () {
     local retvalue
-
-    if [ "${BUILD_ONLY}" == "1" ]
-    then
-	debugmsg "--build-only flag set: nothing will be installed."
-	return
-    fi
 
     run_cmd pushd "${DSPACE_INSTALLER_DIR}" >/dev/null || fatal "Unable to cd to ${DSPACE_INSTALLER_DIR}"
     
@@ -639,10 +627,19 @@ then
 	run_cmd do_maven_clean
 fi	
 
-do_maven_build
+if [ "${ANT_ONLY}" == "1" ]
+then
+    debugmsg "--ant-only flag is set: do_maven_build() does nothing!"
+else
+    do_maven_build
+    do_post_build_fixes    
+fi
 
-do_post_build_fixes
-
-do_ant_update
+if [ "${BUILD_ONLY}" == "1" ]
+then
+    debugmsg "--build-only flag set: nothing will be installed."
+else
+    do_ant_update    
+fi
 
 cleanup
