@@ -70,6 +70,9 @@ DRYRUN=0
 # Need a variable to cleanup
 MAKECLEAN=0
 
+# There should be a better way to return strings from functions
+CMD_RET_STRING=""
+
 ###########################################################################
 # fatal() - Exit with an error message after running cleanup.             #
 ###########################################################################
@@ -117,6 +120,7 @@ function dump_env_vars () {
 ###########################################################################
 function run_cmd () {
     local retval
+    local getstring=0
     local always=0
 
     if [ "$1" == "--always" ]
@@ -124,6 +128,14 @@ function run_cmd () {
 	always=1
 	shift
     fi
+
+    if [ "$1" == "--getstring" ]
+    then
+	getstring=1
+	CMD_RET_STRING=""
+	shift
+    fi
+	
     
     if [ "$DRYRUN" == "1" ]
     then
@@ -136,9 +148,15 @@ function run_cmd () {
 	
     debugmsg "Running command: $*"
 
-    "$@"
-
-    retval="$?"
+    if [ "${getstring}" == 1 ]
+    then
+	CMD_RET_STRING="$@"
+	retval="$?"
+	debugmsg "Command output string = ${CMD_RET_STRING}"
+    else
+	"$@"
+	retval="$?"
+    fi
 
     debugmsg "Command return value = ${retval}"
 
@@ -406,7 +424,7 @@ function do_maven_clean () {
 # a different branch can't be checked out because of local changes.       #
 ###########################################################################
 function check_out_if_necessary () {
-    local git_status retvalue current_branch
+    local git_status retvalue current_branch retstring
     local location="$1"
     local new_branch="$2"
 
@@ -414,14 +432,18 @@ function check_out_if_necessary () {
 
     if [ "${BUILD_TYPE}" == "asis" ] ; then debugmsg "Not checking anything out - BUILD_TYPE = \"asis\"." ; return ; fi
 
-    current_branch=$(run_cmd --always git branch --show-current)
+    run_cmd --always --getstring git branch --show-current
+    current_branch="${CMD_RET_STRING}"
     
-    if [ "${current_branch}" == "${new_branch}" ] ; then debugmsg "Already in ${new_branch}." ; return ; fi
-	
-    if ! git_status=$(run_cmd --always git status --short 2>&1)
+    if [ "${current_branch}" == "${new_branch}" ] ; then debugmsg "${new_branch} is already checked out." ; return ; fi
+
+    run_cmd --always --getstring git status --short 2>&1
+    if [ $? -gt 0 ]
     then
-       fatal "Error from git status: ${git_status}."
+	printf -v retstring "Error from git status: %s. Return value=%d." "${CMD_RET_STRING}" $?
+	fatal "${retstring}"
     fi
+    git_status="${CMD_RET_STRING}"
 
     if [ "X${git_status}" != "X" ]
     then
@@ -429,8 +451,6 @@ function check_out_if_necessary () {
 	print "Looks like you need to commit  or stash the current changes before switching branches.\n"
 	return 11
     fi
-
-
     
     run_cmd --always pushd "${location}"  >/dev/null || fatal "Unable to cd to ${location}"
     debugmsg "Checking out branch ${new_branch}."    
