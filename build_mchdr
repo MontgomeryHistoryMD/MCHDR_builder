@@ -135,7 +135,6 @@ function run_cmd () {
 	CMD_RET_STRING=""
 	shift
     fi
-	
     
     if [ "$DRYRUN" == "1" ]
     then
@@ -452,8 +451,8 @@ function check_out_if_necessary () {
 	return 11
     fi
     
-    run_cmd --always pushd "${location}"  >/dev/null || fatal "Unable to cd to ${location}"
-    debugmsg "Checking out branch ${new_branch}."    
+    run_cmd --always pushd "${location}" >/dev/null || fatal "Unable to cd to ${location}"
+
     run_cmd git checkout "${new_branch}"
     retvalue=$?
 
@@ -569,19 +568,24 @@ function fix_dspace_issue_8557 () {
     then
 	run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/lib/"
 	run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/lib/${old_file}"
-	
+
 	for component in jspui oai rdf rest sword swordv2 xmlui
 	do
-	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/${component}/target/${component}-${REVISION}/WEB-INF/lib/"
-	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/${component}/target/${component}-${REVISION}/WEB-INF/lib/${old_file}"
-	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/${component}-${REVISION}/WEB-INF/lib/"
-	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/${component}-${REVISION}/WEB-INF/lib/${old_file}"
-	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/webapps/${component}/WEB-INF/lib/"
-	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/webapps/${component}/WEB-INF/lib/${old_file}"
+	    # Replace the jar file in each component runtime lib location
 	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace-${component}/target/dspace-${component}-${REVISION}/WEB-INF/lib/"
 	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace-${component}/target/dspace-${component}-${REVISION}/WEB-INF/lib/${old_file}"
+
+	    # Replace the jar files for each module lib location
+	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/${component}-${REVISION}/WEB-INF/lib/"
+	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/${component}-${REVISION}/WEB-INF/lib/${old_file}"
+
+	    # Replace the jar file to be made into the war file
 	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/war/work/org.dspace/dspace-${component}/WEB-INF/lib/"
 	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/war/work/org.dspace/dspace-${component}/WEB-INF/lib/${old_file}"
+
+	    # Replace the files in the installer library
+	    run_cmd cp "${new_file}" "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/webapps/${component}/WEB-INF/lib/"
+	    run_cmd rm -f "${DSPACE_SOURCE_DIR}/dspace/target/dspace-installer/webapps/${component}/WEB-INF/lib/${old_file}"
 
 	    # So we use ZIP "delete" to remove files from a .war file and JAR "update" to add a different version
     	    run_cmd --always pushd "${DSPACE_SOURCE_DIR}/dspace/modules/${component}/target/war/work/org.dspace/dspace-${component}/"
